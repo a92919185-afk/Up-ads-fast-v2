@@ -1,0 +1,201 @@
+{
+  "project": "Upadsfast Web App",
+  "branchName": "feature/upadsfast-webapp",
+  "description": "Next.js webapp que transforma uma URL ou texto de oferta em planilha .xlsx completa para Google Ads Bulk Upload. IA apenas para extração de variáveis (JSON), templates determinísticos para geração de copy.",
+  "webDir": "web",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Scaffold Next.js com Tailwind dark mode",
+      "description": "Criar projeto Next.js em /web com App Router, Tailwind CSS configurado em dark mode por padrão, fonte Inter e estrutura de pastas definida.",
+      "acceptanceCriteria": [
+        "next dev roda sem erros",
+        "Fundo dark (#0a0a0a) visível na tela inicial",
+        "Fonte Inter carregando via next/font",
+        "Estrutura: app/, components/steps/, components/ui/, lib/"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Instalar e configurar shadcn/ui",
+      "description": "Adicionar shadcn/ui ao projeto com tema dark. Instalar componentes: Button, Input, Textarea, Tabs, Badge, Card, Select.",
+      "acceptanceCriteria": [
+        "components.json presente e configurado",
+        "Componentes Button, Input, Textarea, Tabs, Badge, Card, Select disponíveis em components/ui/",
+        "Tema dark aplicado globalmente"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Layout base e página principal com máquina de estados",
+      "description": "Criar app/layout.tsx com metadata e app/page.tsx com máquina de 4 estados (input → edit → preview → done). Renderiza o step correto com base no estado atual.",
+      "acceptanceCriteria": [
+        "Estado global via useState: step = 1|2|3|4",
+        "Stepper visual no topo mostrando os 4 passos",
+        "Cada step renderiza um componente placeholder distinto",
+        "Transição de estado funciona ao clicar botões de teste"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Step 1 — InputStep (URL + Texto colado)",
+      "description": "Componente components/steps/InputStep.tsx com duas abas: 'URL' e 'Texto Completo'. Botão 'Extrair Dados' que chama o estado pai com o input.",
+      "acceptanceCriteria": [
+        "Duas abas funcionais via shadcn Tabs",
+        "Aba URL: input grande para colar link",
+        "Aba Texto: textarea espaçosa para colar conteúdo da página",
+        "Botão 'Extrair Dados' emite o valor para o pai",
+        "Loading state no botão enquanto processa"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Rota /api/extract — extração de variáveis via IA",
+      "description": "Criar app/api/extract/route.ts. Recebe {url?, text}. Se URL: tenta fetch + cheerio para extrair texto. Chama Claude API (Anthropic SDK) com prompt estruturado para retornar JSON com as 9 variáveis. Fallback: se URL falhar, usa texto direto.",
+      "acceptanceCriteria": [
+        "POST /api/extract aceita {url?, text?}",
+        "Retorna JSON: {product, country, language, price, currency, discount, guarantee, ship_min, has_free_shipping, url}",
+        "Cheerio tenta extrair texto da URL (best-effort)",
+        "Claude API chamada com prompt que exige JSON válido",
+        "Erros retornam {error: string} com status 400/500"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Step 2 — EditStep (dashboard editável de variáveis)",
+      "description": "Componente components/steps/EditStep.tsx. Recebe os dados extraídos e exibe campos editáveis para cada variável. Botão 'Gerar Planilha' emite os dados confirmados para o pai.",
+      "acceptanceCriteria": [
+        "9 campos editáveis: produto, país, idioma (Select), moeda, preço, desconto, garantia, frete mín., frete grátis",
+        "Select de idioma com opções: en, pt, es, de, da",
+        "Todos os campos pré-populados com dados da extração",
+        "Botão 'Gerar Planilha' envia os dados validados",
+        "Layout em grid 2 colunas, clean e legível"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "lib/templates.ts — port dos templates Python para TypeScript",
+      "description": "Portar os templates de copy do generate-spreadsheet.py para TypeScript em lib/templates.ts. Idiomas: en, pt, es, de, da. Funções render() e trunc() idênticas ao Python.",
+      "acceptanceCriteria": [
+        "Tipo CopyContext definido com as 8 variáveis",
+        "COPY dict com os 5 idiomas (en/pt/es/de/da)",
+        "Função render(template, ctx) substitui variáveis",
+        "Função trunc(text, limit) trunca em word boundary",
+        "Função renderTrunc(template, ctx, limit) combina as duas",
+        "Exporta generateAllCopy(ctx) retornando headlines[], descriptions[], callouts[], sitelinks[], snippet, promo"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Rota /api/generate — geração determinística via templates",
+      "description": "Criar app/api/generate/route.ts. Recebe as variáveis validadas do EditStep, chama generateAllCopy() de lib/templates.ts e retorna o JSON completo com todas as 5 abas.",
+      "acceptanceCriteria": [
+        "POST /api/generate aceita as 9 variáveis",
+        "Retorna JSON com: headlines[15], descriptions[4], callouts[5], sitelinks[6], snippet, promo",
+        "Zero chamadas de IA nesta rota",
+        "Inclui validação de todos os limites de caracteres no retorno (campo valid: boolean)",
+        "Erros de validação retornam lista de campos que excederam o limite"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Step 3 — PreviewStep (visualização das 5 abas)",
+      "description": "Componente components/steps/PreviewStep.tsx. Exibe os dados gerados em 5 abas (shadcn Tabs), simulando a planilha. Cada campo mostra o contador de caracteres [22/30].",
+      "acceptanceCriteria": [
+        "5 abas: RSA, Callouts, Sitelinks, Snippets, Promoções",
+        "Aba RSA: tabela com H1-H15 e D1-D4, cada um com badge [N/30] e [N/90]",
+        "Badge verde se dentro do limite, vermelho se exceder",
+        "Aba Callouts: lista com [N/25] por item",
+        "Aba Sitelinks: tabela com text/D1/D2 e seus limites",
+        "Botão 'Baixar .xlsx' visível e proeminente"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "lib/excel.ts — geração do .xlsx com exceljs",
+      "description": "Criar lib/excel.ts com função generateXlsx(data, cfg) que monta o arquivo com 5 abas, cores por aba e colunas exatas do Google Ads. Igual ao generate-spreadsheet.py mas em TypeScript.",
+      "acceptanceCriteria": [
+        "Instala exceljs",
+        "5 abas com nomes exatos: ANUNCIOS_SEARCH_RSA, CALLOUTS, SITELINKS, SNIPPETS, PROMOCOES",
+        "Cores de aba idênticas ao Python (azul, verde, vermelho, dourado, roxo)",
+        "Headers com fill azul escuro, font branca, bold",
+        "Colunas auxiliares (Product_Name, Country etc.) na aba RSA",
+        "Retorna Buffer para download"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Rota /api/download — serve o .xlsx gerado",
+      "description": "Criar app/api/download/route.ts. Recebe o payload completo (variáveis + copy gerada), chama generateXlsx() e retorna o arquivo com headers corretos para download.",
+      "acceptanceCriteria": [
+        "POST /api/download aceita {cfg, data}",
+        "Retorna response com Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition: attachment; filename={PRODUTO}_{PAIS}_BulkUpload.xlsx",
+        "Download dispara automaticamente no browser"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Integração completa do fluxo end-to-end em page.tsx",
+      "description": "Conectar todos os steps em page.tsx: InputStep chama /api/extract → EditStep recebe e permite edição → /api/generate gera copy → PreviewStep exibe → /api/download baixa .xlsx.",
+      "acceptanceCriteria": [
+        "Fluxo completo funciona do passo 1 ao download",
+        "Estado compartilhado entre steps via useState no page.tsx",
+        "Botão 'Voltar' em cada step (exceto o 1)",
+        "Erros da API exibidos inline com mensagem clara",
+        "Loading spinners em todas as chamadas assíncronas"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Polish final — animações, empty states e responsividade",
+      "description": "Adicionar transições suaves entre steps, empty states com instruções, e garantir que o layout funcione em telas menores (min 768px).",
+      "acceptanceCriteria": [
+        "Transição fade entre steps",
+        "Tela inicial com headline claro sobre o que o app faz",
+        "Empty states nas abas do preview se sem dados",
+        "Layout responsivo até 768px de largura",
+        "Favicon e título da página configurados"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": ""
+    }
+  ]
+}
