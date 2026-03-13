@@ -1,6 +1,7 @@
 // ============================================================
 //  UPADSFAST — Google Ads Bulk Upload Script
 //  Versao: MCC (Multiplas Contas)
+//  Fix: Execucao sequencial com throttling para hierarquia
 // ============================================================
 
 // >>> CONFIGURACAO <<<
@@ -12,18 +13,26 @@ var SPREADSHEET_URL = 'COLE_A_URL_DA_SUA_PLANILHA_AQUI';
 // false = APPLY (aplica mudancas)
 var PREVIEW_MODE = true;
 
-// Nomes das abas
+// Nomes das abas (correspondem aos nomes gerados pelo excel.ts)
 var SHEET = {
-  ADS:        'ANUNCIOS_SEARCH_RSA',
-  CALLOUTS:   'CALLOUTS',
-  SITELINKS:  'SITELINKS',
-  SNIPPETS:   'SNIPPETS',
-  PROMOTIONS: 'PROMOCOES'
+  CAMPAIGNS:  'Campaigns',
+  AD_GROUPS:  'Ad groups',
+  ADS:        'Ads',
+  CALLOUTS:   'Callouts',
+  SITELINKS:  'Sitelinks',
+  SNIPPETS:   'Structured snippets',
+  PROMOTIONS: 'Promotions'
 };
 
 // Nome da coluna que identifica a conta em cada aba.
-// Se a aba nao tiver essa coluna, processa todas as linhas para todas as contas.
 var ACCOUNT_ID_COLUMN = 'Account_ID';
+
+// Tempo de espera (ms) apos upload da Campanha para garantir
+// que o Job no servidor do Google finalize antes dos filhos.
+var CAMPAIGN_THROTTLE_MS = 60000; // 60 segundos
+
+// Tempo de espera (ms) apos upload de Ad Groups
+var AD_GROUP_THROTTLE_MS = 30000; // 30 segundos
 
 // ============================================================
 
@@ -44,8 +53,30 @@ function main() {
     var accountId = account.getCustomerId();
 
     Logger.log('');
-    Logger.log('--- Conta: ' + accountId + ' (' + account.getName() + ') ---');
+    Logger.log('=== Conta: ' + accountId + ' (' + account.getName() + ') ===');
 
+    // ── FASE 1: CAMPANHA (pai de tudo) ──
+    Logger.log('  >>> FASE 1: Criando Campanhas...');
+    var campResult = processSheet(ss, SHEET.CAMPAIGNS, accountId);
+
+    if (campResult.rows > 0 && !PREVIEW_MODE) {
+      Logger.log('  Aguardando ' + (CAMPAIGN_THROTTLE_MS / 1000) + 's para o Job da Campanha finalizar...');
+      Utilities.sleep(CAMPAIGN_THROTTLE_MS);
+      Logger.log('  Throttle concluido.');
+    }
+
+    // ── FASE 2: GRUPOS DE ANUNCIOS (filho da campanha) ──
+    Logger.log('  >>> FASE 2: Criando Ad Groups...');
+    var agResult = processSheet(ss, SHEET.AD_GROUPS, accountId);
+
+    if (agResult.rows > 0 && !PREVIEW_MODE) {
+      Logger.log('  Aguardando ' + (AD_GROUP_THROTTLE_MS / 1000) + 's para o Job dos Ad Groups finalizar...');
+      Utilities.sleep(AD_GROUP_THROTTLE_MS);
+      Logger.log('  Throttle concluido.');
+    }
+
+    // ── FASE 3: ANUNCIOS E EXTENSOES (filhos do grupo) ──
+    Logger.log('  >>> FASE 3: Criando Ads e Extensoes...');
     processSheet(ss, SHEET.ADS, accountId);
     processSheet(ss, SHEET.CALLOUTS, accountId);
     processSheet(ss, SHEET.SITELINKS, accountId);
@@ -61,38 +92,60 @@ function main() {
 }
 
 function processSheet(ss, sheetName, accountId) {
+  var result = { sheet: sheetName, rows: 0, status: '' };
+
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
+    result.status = 'ERRO: aba nao encontrada';
     Logger.log('  [ERRO] ' + sheetName + ': aba nao encontrada.');
-    return;
+    return result;
   }
 
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) {
+    result.status = 'VAZIA';
     Logger.log('  [AVISO] ' + sheetName + ': sem dados.');
-    return;
+    return result;
   }
 
-  var headers = [];
+  // ── Sanitizar cabecalhos ──
+  var rawHeaders = [];
   for (var h = 0; h < data[0].length; h++) {
-    headers.push(String(data[0][h]).trim());
+    rawHeaders.push(String(data[0][h]).trim());
   }
 
-  // Verificar se existe coluna Account_ID
-  var accountCol = headers.indexOf(ACCOUNT_ID_COLUMN);
+  // Verificar coluna Account_ID
+  var accountCol = rawHeaders.indexOf(ACCOUNT_ID_COLUMN);
   var hasAccountFilter = accountCol >= 0;
 
-  // Montar headers para upload (sem a coluna Account_ID, que nao eh do Google Ads)
-  var uploadHeaders = [];
-  var uploadIndexes = [];
-  for (var h = 0; h < headers.length; h++) {
-    if (headers[h] !== '' && headers[h] !== ACCOUNT_ID_COLUMN) {
-      uploadHeaders.push(headers[h]);
-      uploadIndexes.push(h);
+  // Filtrar headers: remover vazios, Account_ID, e Status duplicados
+  var validHeaders = [];
+  var validIndexes = [];
+  var hasStatusCol = false;
+
+  for (var h = 0; h < rawHeaders.length; h++) {
+    var header = rawHeaders[h];
+
+    // Pular headers vazios e Account_ID
+    if (header === '' || header === ACCOUNT_ID_COLUMN) continue;
+
+    // Deduplicar coluna "Status" — manter apenas a primeira ocorrencia
+    var isStatus = header.toLowerCase() === 'status' ||
+                   header.toLowerCase() === 'campaign status';
+    if (isStatus) {
+      if (hasStatusCol) {
+        Logger.log('  [SANITIZE] Coluna duplicada ignorada: "' + header + '" (col ' + (h + 1) + ')');
+        continue;
+      }
+      hasStatusCol = true;
+      header = 'Status'; // Normalizar nome
     }
+
+    validHeaders.push(header);
+    validIndexes.push(h);
   }
 
-  var upload = AdsApp.bulkUploads().newCsvUpload(uploadHeaders);
+  var upload = AdsApp.bulkUploads().newCsvUpload(validHeaders);
   upload.forCampaignManagement();
 
   var count = 0;
@@ -108,10 +161,12 @@ function processSheet(ss, sheetName, accountId) {
 
     var row = {};
     var hasData = false;
-    for (var j = 0; j < uploadIndexes.length; j++) {
-      var val = data[i][uploadIndexes[j]];
+
+    for (var j = 0; j < validIndexes.length; j++) {
+      var val = data[i][validIndexes[j]];
+      // Trim universal em todos os valores
       if (val !== '' && val !== null && val !== undefined) {
-        row[uploadHeaders[j]] = val;
+        row[validHeaders[j]] = String(val).trim();
         hasData = true;
       }
     }
@@ -123,19 +178,27 @@ function processSheet(ss, sheetName, accountId) {
   }
 
   if (count === 0) {
+    result.status = 'VAZIA (0 linhas para esta conta)';
     Logger.log('  [AVISO] ' + sheetName + ': 0 linhas para conta ' + accountId);
-    return;
+    return result;
   }
+
+  result.rows = count;
 
   try {
     if (PREVIEW_MODE) {
       upload.preview();
+      result.status = 'PREVIEW enviado';
       Logger.log('  [OK] ' + sheetName + ': ' + count + ' linha(s) — PREVIEW');
     } else {
       upload.apply();
+      result.status = 'APLICADO';
       Logger.log('  [OK] ' + sheetName + ': ' + count + ' linha(s) — APLICADO');
     }
   } catch (e) {
+    result.status = 'ERRO: ' + e.message;
     Logger.log('  [ERRO] ' + sheetName + ': ' + e.message);
   }
+
+  return result;
 }
